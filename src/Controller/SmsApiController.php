@@ -68,23 +68,33 @@ class SmsApiController extends ControllerBase {
     ];
     $response = new JsonResponse($response_data);
 
-    // If api_solutions is present, also generate compatible bearer cookie.
+    // If api_solutions is present, generate a compatible bearer cookie.
+    // Some installations expose generateToken() but not generateBearerToken().
     if (\Drupal::getContainer()->has('api_solutions.api_crud')) {
       $token_service = \Drupal::service('api_solutions.api_crud');
-      $token = $token_service->generateBearerToken($user);
-      $response_data['token'] = $token;
-      $response->setData($response_data);
-      $response->headers->setCookie(new Cookie(
-        'auth_token',
-        $token,
-        time() + (30 * 24 * 3600),
-        '/',
-        NULL,
-        FALSE,
-        TRUE,
-        FALSE,
-        'Lax'
-      ));
+      $token = NULL;
+      if (method_exists($token_service, 'generateBearerToken')) {
+        $token = $token_service->generateBearerToken($user);
+      }
+      elseif (method_exists($token_service, 'generateToken')) {
+        $token = $token_service->generateToken($user);
+      }
+
+      if (is_string($token) && $token !== '') {
+        $response_data['token'] = $token;
+        $response->setData($response_data);
+        $response->headers->setCookie(new Cookie(
+          'auth_token',
+          $token,
+          time() + (30 * 24 * 3600),
+          '/',
+          NULL,
+          FALSE,
+          TRUE,
+          FALSE,
+          'Lax'
+        ));
+      }
     }
 
     return $response;
