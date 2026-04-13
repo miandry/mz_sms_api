@@ -1,0 +1,98 @@
+<?php
+
+/**
+ * @file
+ * Install hooks for mz_sms_api.
+ */
+
+use Drupal\field\Entity\FieldConfig;
+use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\node\Entity\NodeType;
+
+/**
+ * Implements hook_install().
+ */
+function mz_sms_api_install() {
+  _mz_sms_api_ensure_sms_type();
+  _mz_sms_api_ensure_sms_fields();
+}
+
+/**
+ * Creates sms content type when missing.
+ */
+function _mz_sms_api_ensure_sms_type() {
+  if (!NodeType::load('sms')) {
+    NodeType::create([
+      'type' => 'sms',
+      'name' => 'SMS',
+      'description' => 'SMS messages',
+      'new_revision' => TRUE,
+      'preview_mode' => 0,
+      'display_submitted' => TRUE,
+    ])->save();
+  }
+}
+
+/**
+ * Ensures all custom fields for sms type exist.
+ */
+function _mz_sms_api_ensure_sms_fields() {
+  $definitions = [
+    'field_content' => [
+      'label' => 'content',
+      'type' => 'string_long',
+      'storage_settings' => ['case_sensitive' => FALSE],
+      'field_settings' => [],
+    ],
+    'field_date' => [
+      'label' => 'date',
+      'type' => 'datetime',
+      'storage_settings' => ['datetime_type' => 'date'],
+      'field_settings' => [],
+    ],
+    'field_numero_destinataire' => [
+      'label' => 'numero_destinataire',
+      'type' => 'string',
+      'storage_settings' => ['max_length' => 255, 'is_ascii' => FALSE, 'case_sensitive' => FALSE],
+      'field_settings' => [],
+    ],
+    'field_numero_de_l_expediteur' => [
+      'label' => 'numero_de_l_expediteur',
+      'type' => 'string',
+      'storage_settings' => ['max_length' => 255, 'is_ascii' => FALSE, 'case_sensitive' => FALSE],
+      'field_settings' => [],
+    ],
+  ];
+
+  foreach ($definitions as $field_name => $def) {
+    if (!FieldStorageConfig::loadByName('node', $field_name)) {
+      FieldStorageConfig::create([
+        'field_name' => $field_name,
+        'entity_type' => 'node',
+        'type' => $def['type'],
+        'settings' => $def['storage_settings'],
+        'cardinality' => 1,
+      ])->save();
+    }
+
+    if (!FieldConfig::loadByName('node', 'sms', $field_name)) {
+      FieldConfig::create([
+        'field_storage' => FieldStorageConfig::loadByName('node', $field_name),
+        'bundle' => 'sms',
+        'label' => $def['label'],
+        'required' => FALSE,
+        'settings' => $def['field_settings'],
+      ])->save();
+    }
+  }
+}
+
+/**
+ * Update existing sites.
+ */
+function mz_sms_api_update_10001() {
+  _mz_sms_api_ensure_sms_type();
+  _mz_sms_api_ensure_sms_fields();
+  return t('SMS content type and fields ensured.');
+}
+

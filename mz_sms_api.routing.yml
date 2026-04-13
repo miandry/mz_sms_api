@@ -1,0 +1,56 @@
+mz_sms_api.sms_list:
+  path: '/api/mz_sms/sms'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::listSms'
+    _title: 'List SMS'
+  methods: [GET]
+  requirements:
+    _access: 'TRUE'
+
+mz_sms_api.login:
+  path: '/api/mz_sms/login'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::loginUser'
+    _title: 'Login user'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+
+mz_sms_api.sms_create:
+  path: '/api/mz_sms/sms'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::createSms'
+    _title: 'Create SMS'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+
+mz_sms_api.sms_view:
+  path: '/api/mz_sms/sms/{nid}'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::viewSms'
+    _title: 'View SMS'
+  methods: [GET]
+  requirements:
+    _access: 'TRUE'
+    nid: '\d+'
+
+mz_sms_api.sms_update:
+  path: '/api/mz_sms/sms/{nid}'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::updateSms'
+    _title: 'Update SMS'
+  methods: [PUT, PATCH]
+  requirements:
+    _access: 'TRUE'
+    nid: '\d+'
+
+mz_sms_api.sms_delete:
+  path: '/api/mz_sms/sms/{nid}'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::deleteSms'
+    _title: 'Delete SMS'
+  methods: [DELETE]
+  requirements:
+    _access: 'TRUE'
+    nid: '\d+'

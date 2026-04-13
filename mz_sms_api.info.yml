@@ -1,0 +1,10 @@
+name: 'MZ SMS API'
+type: module
+description: 'API CRUD for sms content type.'
+core_version_requirement: ^9 || ^10
+package: Custom
+dependencies:
+  - drupal:node
+  - drupal:field
+  - drupal:text
+  - drupal:datetime
