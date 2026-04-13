@@ -68,33 +68,21 @@ class SmsApiController extends ControllerBase {
     ];
     $response = new JsonResponse($response_data);
 
-    // If api_solutions is present, generate a compatible bearer cookie.
-    // Some installations expose generateToken() but not generateBearerToken().
-    if (\Drupal::getContainer()->has('api_solutions.api_crud')) {
-      $token_service = \Drupal::service('api_solutions.api_crud');
-      $token = NULL;
-      if (method_exists($token_service, 'generateBearerToken')) {
-        $token = $token_service->generateBearerToken($user);
-      }
-      elseif (method_exists($token_service, 'generateToken')) {
-        $token = $token_service->generateToken($user);
-      }
-
-      if (is_string($token) && $token !== '') {
-        $response_data['token'] = $token;
-        $response->setData($response_data);
-        $response->headers->setCookie(new Cookie(
-          'auth_token',
-          $token,
-          time() + (30 * 24 * 3600),
-          '/',
-          NULL,
-          FALSE,
-          TRUE,
-          FALSE,
-          'Lax'
-        ));
-      }
+    $token = $this->generateBearerTokenForUser($user);
+    if (is_string($token) && $token !== '') {
+      $response_data['token'] = $token;
+      $response->setData($response_data);
+      $response->headers->setCookie(new Cookie(
+        'auth_token',
+        $token,
+        time() + (30 * 24 * 3600),
+        '/',
+        NULL,
+        FALSE,
+        TRUE,
+        FALSE,
+        'Lax'
+      ));
     }
 
     return $response;
@@ -104,6 +92,13 @@ class SmsApiController extends ControllerBase {
    * List sms nodes with optional pagination.
    */
   public function listSms(Request $request) {
+    if (!$this->getAuthenticatedUserFromRequest($request)) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'Not allowed',
+      ], 401);
+    }
+
     $limit = max(1, min(200, (int) $request->query->get('limit', 50)));
     $page = max(0, (int) $request->query->get('page', 0));
     $offset = $page * $limit;
@@ -136,6 +131,13 @@ class SmsApiController extends ControllerBase {
    * View one sms node.
    */
   public function viewSms($nid) {
+    if (!$this->getAuthenticatedUserFromRequest(\Drupal::request())) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'Not allowed',
+      ], 401);
+    }
+
     $node = Node::load((int) $nid);
     if (!$this->isSmsNode($node)) {
       return new JsonResponse([
@@ -154,6 +156,14 @@ class SmsApiController extends ControllerBase {
    * Create sms node.
    */
   public function createSms(Request $request) {
+    $auth_user = $this->getAuthenticatedUserFromRequest($request);
+    if (!$auth_user) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'Not allowed',
+      ], 401);
+    }
+
     $data = $this->decodeJson($request);
     if ($data === NULL) {
       return new JsonResponse([
@@ -166,6 +176,7 @@ class SmsApiController extends ControllerBase {
       $node = Node::create([
         'type' => 'sms',
         'title' => trim((string) ($data['title'] ?? 'SMS ' . date('Y-m-d H:i:s'))),
+        'uid' => (int) $auth_user->id(),
       ]);
 
       $this->applyPayload($node, $data);
@@ -189,6 +200,13 @@ class SmsApiController extends ControllerBase {
    * Update sms node.
    */
   public function updateSms($nid, Request $request) {
+    if (!$this->getAuthenticatedUserFromRequest($request)) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'Not allowed',
+      ], 401);
+    }
+
     $node = Node::load((int) $nid);
     if (!$this->isSmsNode($node)) {
       return new JsonResponse([
@@ -227,6 +245,13 @@ class SmsApiController extends ControllerBase {
    * Delete sms node.
    */
   public function deleteSms($nid) {
+    if (!$this->getAuthenticatedUserFromRequest(\Drupal::request())) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'Not allowed',
+      ], 401);
+    }
+
     $node = Node::load((int) $nid);
     if (!$this->isSmsNode($node)) {
       return new JsonResponse([
@@ -331,6 +356,95 @@ class SmsApiController extends ControllerBase {
     }
     $data = json_decode($raw, TRUE);
     return is_array($data) ? $data : NULL;
+  }
+
+  /**
+   * Generate a bearer token using available auth services.
+   */
+  protected function generateBearerTokenForUser($user) : ?string {
+    foreach (['api_solutions.api_crud', 'api.crud'] as $service_id) {
+      if (!\Drupal::getContainer()->has($service_id)) {
+        continue;
+      }
+      $service = \Drupal::service($service_id);
+      if (method_exists($service, 'generateBearerToken')) {
+        $token = $service->generateBearerToken($user);
+        if (is_string($token) && $token !== '') {
+          return $token;
+        }
+      }
+      if (method_exists($service, 'generateToken')) {
+        $token = $service->generateToken($user);
+        if (is_string($token) && $token !== '') {
+          return $token;
+        }
+      }
+    }
+
+    return NULL;
+  }
+
+  /**
+   * Resolve authenticated user from bearer token/cookie.
+   */
+  protected function getAuthenticatedUserFromRequest(Request $request) {
+    // 1) Authorization: Bearer <token>
+    $token = $request->headers->get('Authorization');
+    if (is_string($token) && preg_match('/Bearer\s+(.+)/i', $token, $matches)) {
+      $token = trim($matches[1]);
+    }
+    else {
+      $token = NULL;
+    }
+
+    // 2) HTTP-only cookie fallback.
+    if (!$token) {
+      $token = $request->cookies->get('auth_token');
+    }
+
+    // 3) Raw token in POST/body/query (token=...).
+    if (!$token) {
+      $token = (string) $request->request->get('token', '');
+    }
+    if (!$token) {
+      $token = (string) $request->query->get('token', '');
+    }
+    if (!$token) {
+      $payload = $this->decodeJson($request);
+      if (is_array($payload) && !empty($payload['token'])) {
+        $token = (string) $payload['token'];
+      }
+    }
+
+    if (!$token) {
+      return NULL;
+    }
+
+    foreach (['api_solutions.api_crud', 'api.crud'] as $service_id) {
+      if (!\Drupal::getContainer()->has($service_id)) {
+        continue;
+      }
+      $service = \Drupal::service($service_id);
+      if (method_exists($service, 'validateBearerToken')) {
+        $user = $service->validateBearerToken($token);
+        if ($user) {
+          return $user;
+        }
+      }
+      if (method_exists($service, 'getUserByToken')) {
+        $user = $service->getUserByToken($token);
+        if ($user) {
+          return $user;
+        }
+      }
+      if (method_exists($service, 'isTokenValid') && method_exists($service, 'getUserByToken')) {
+        if ($service->isTokenValid($token)) {
+          return $service->getUserByToken($token);
+        }
+      }
+    }
+
+    return NULL;
   }
 
 }

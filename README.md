@@ -40,6 +40,14 @@ drush cr
 }
 ```
 
+Response includes `token` when available. Use it as:
+
+`Authorization: Bearer <token>`
+
+Fallbacks accepted by SMS endpoints:
+- cookie `auth_token`
+- request `token` (POST/query/body JSON)
+
 ### 1) Create SMS
 
 `POST /api/mz_sms/sms`
@@ -84,5 +92,6 @@ drush cr
 
 ## Notes
 
-- Current routes use `_access: TRUE`.
-- Add authentication/authorization if needed for production usage.
+- Login route is open (`_access: TRUE`), but SMS CRUD routes require a valid token.
+- If bearer header and cookie both fail, send `token` in request payload/query.
+- If all token methods fail, API returns `Not allowed`.
