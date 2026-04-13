@@ -48,6 +48,31 @@ Fallbacks accepted by SMS endpoints:
 - cookie `auth_token`
 - request `token` (POST/query/body JSON)
 
+### Token usage examples
+
+#### A) Bearer header (recommended)
+
+```bash
+curl -X POST http://YOUR-BASE-URL/api/mz_sms/sms \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"title":"SMS token test","field_content":"hello","field_date":"2026-04-13","field_numero_destinataire":"0340000000","field_numero_de_l_expediteur":"0320000000"}'
+```
+
+#### B) `token` in JSON body
+
+```bash
+curl -X POST http://YOUR-BASE-URL/api/mz_sms/sms \
+  -H "Content-Type: application/json" \
+  -d '{"token":"YOUR_TOKEN","title":"SMS token test","field_content":"hello","field_date":"2026-04-13","field_numero_destinataire":"0340000000","field_numero_de_l_expediteur":"0320000000"}'
+```
+
+#### C) `token` in query string
+
+```bash
+curl -X GET "http://YOUR-BASE-URL/api/mz_sms/sms?limit=20&page=0&token=YOUR_TOKEN"
+```
+
 ### 1) Create SMS
 
 `POST /api/mz_sms/sms`
@@ -70,6 +95,10 @@ Fallbacks accepted by SMS endpoints:
 ### 2) List SMS
 
 `GET /api/mz_sms/sms?limit=50&page=0`
+
+or with token fallback:
+
+`GET /api/mz_sms/sms?limit=50&page=0&token=YOUR_TOKEN`
 
 ### 3) View SMS
 
