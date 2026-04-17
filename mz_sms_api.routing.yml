@@ -7,6 +7,15 @@ mz_sms_api.sms_list:
   requirements:
     _access: 'TRUE'
 
+mz_sms_api.sms_last:
+  path: '/api/mz_sms/sms/last'
+  defaults:
+    _controller: '\Drupal\mz_sms_api\Controller\SmsApiController::lastSms'
+    _title: 'Last SMS'
+  methods: [GET]
+  requirements:
+    _access: 'TRUE'
+
 mz_sms_api.login:
   path: '/api/mz_sms/login'
   defaults:

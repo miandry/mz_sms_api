@@ -39,38 +39,68 @@ function _mz_sms_api_ensure_sms_type() {
 function _mz_sms_api_ensure_sms_fields() {
   $definitions = [
     'field_content' => [
-      'label' => 'content',
-      'type' => 'string_long',
+      'label'            => 'Content',
+      'type'             => 'string_long',
       'storage_settings' => ['case_sensitive' => FALSE],
-      'field_settings' => [],
+      'field_settings'   => [],
     ],
     'field_date' => [
-      'label' => 'date',
-      'type' => 'datetime',
+      'label'            => 'Date',
+      'type'             => 'datetime',
       'storage_settings' => ['datetime_type' => 'date'],
-      'field_settings' => [],
+      'field_settings'   => [],
     ],
     'field_numero_destinataire' => [
-      'label' => 'numero_destinataire',
-      'type' => 'string',
+      'label'            => 'Numéro destinataire',
+      'type'             => 'string',
       'storage_settings' => ['max_length' => 255, 'is_ascii' => FALSE, 'case_sensitive' => FALSE],
-      'field_settings' => [],
+      'field_settings'   => [],
     ],
     'field_numero_de_l_expediteur' => [
-      'label' => 'numero_de_l_expediteur',
-      'type' => 'string',
+      'label'            => "Numéro de l'expéditeur",
+      'type'             => 'string',
       'storage_settings' => ['max_length' => 255, 'is_ascii' => FALSE, 'case_sensitive' => FALSE],
-      'field_settings' => [],
+      'field_settings'   => [],
+    ],
+    'field_raison' => [
+      'label'            => 'Raison',
+      'type'             => 'string_long',
+      'storage_settings' => ['case_sensitive' => FALSE],
+      'field_settings'   => [],
+    ],
+    'field_reference' => [
+      'label'            => 'Référence',
+      'type'             => 'string',
+      'storage_settings' => ['max_length' => 255, 'is_ascii' => FALSE, 'case_sensitive' => FALSE],
+      'field_settings'   => [],
+    ],
+    'field_current_solde' => [
+      'label'            => 'Solde actuel',
+      'type'             => 'decimal',
+      'storage_settings' => ['precision' => 18, 'scale' => 2],
+      'field_settings'   => [],
+    ],
+    'field_type_action' => [
+      'label'            => 'Type action',
+      'type'             => 'list_string',
+      'storage_settings' => [
+        'allowed_values' => [
+          ['value' => 'transfer', 'label' => 'Transfert'],
+          ['value' => 'recu',     'label' => 'Reçu'],
+          ['value' => 'depot',    'label' => 'Dépôt'],
+        ],
+      ],
+      'field_settings'   => [],
     ],
   ];
 
   foreach ($definitions as $field_name => $def) {
     if (!FieldStorageConfig::loadByName('node', $field_name)) {
       FieldStorageConfig::create([
-        'field_name' => $field_name,
+        'field_name'  => $field_name,
         'entity_type' => 'node',
-        'type' => $def['type'],
-        'settings' => $def['storage_settings'],
+        'type'        => $def['type'],
+        'settings'    => $def['storage_settings'],
         'cardinality' => 1,
       ])->save();
     }
@@ -78,21 +108,58 @@ function _mz_sms_api_ensure_sms_fields() {
     if (!FieldConfig::loadByName('node', 'sms', $field_name)) {
       FieldConfig::create([
         'field_storage' => FieldStorageConfig::loadByName('node', $field_name),
-        'bundle' => 'sms',
-        'label' => $def['label'],
-        'required' => FALSE,
-        'settings' => $def['field_settings'],
+        'bundle'        => 'sms',
+        'label'         => $def['label'],
+        'required'      => FALSE,
+        'settings'      => $def['field_settings'],
       ])->save();
     }
+  }
+
+  // field_nom — entity reference to client node bundle.
+  if (!FieldStorageConfig::loadByName('node', 'field_nom')) {
+    FieldStorageConfig::create([
+      'field_name'  => 'field_nom',
+      'entity_type' => 'node',
+      'type'        => 'entity_reference',
+      'settings'    => ['target_type' => 'node'],
+      'cardinality' => 1,
+    ])->save();
+  }
+
+  if (!FieldConfig::loadByName('node', 'sms', 'field_nom')) {
+    FieldConfig::create([
+      'field_storage' => FieldStorageConfig::loadByName('node', 'field_nom'),
+      'bundle'        => 'sms',
+      'label'         => 'Nom (client)',
+      'required'      => FALSE,
+      'settings'      => [
+        'handler'          => 'default:node',
+        'handler_settings' => [
+          'target_bundles' => ['client' => 'client'],
+          'sort'           => ['field' => '_none'],
+          'auto_create'    => FALSE,
+        ],
+      ],
+    ])->save();
   }
 }
 
 /**
- * Update existing sites.
+ * Update existing sites — initial fields.
  */
 function mz_sms_api_update_10001() {
   _mz_sms_api_ensure_sms_type();
   _mz_sms_api_ensure_sms_fields();
   return t('SMS content type and fields ensured.');
+}
+
+/**
+ * Add new fields: field_raison, field_nom, field_type_action,
+ * field_reference, field_current_solde.
+ */
+function mz_sms_api_update_10002() {
+  _mz_sms_api_ensure_sms_fields();
+  return t('New SMS fields added: raison, nom, type_action, reference, current_solde.');
 }
 

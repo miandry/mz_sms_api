@@ -310,6 +310,41 @@ class SmsApiController extends ControllerBase {
     if ($node->hasField('field_numero_de_l_expediteur') && isset($data['field_numero_de_l_expediteur'])) {
       $node->set('field_numero_de_l_expediteur', (string) $data['field_numero_de_l_expediteur']);
     }
+
+    if ($node->hasField('field_raison') && isset($data['field_raison'])) {
+      $node->set('field_raison', [['value' => (string) $data['field_raison']]]);
+    }
+
+    if ($node->hasField('field_reference') && isset($data['field_reference'])) {
+      $node->set('field_reference', (string) $data['field_reference']);
+    }
+
+    if ($node->hasField('field_current_solde') && isset($data['field_current_solde'])) {
+      $node->set('field_current_solde', (string) $data['field_current_solde']);
+    }
+
+    $allowed_type_action = ['transfer', 'recu', 'depot'];
+    if ($node->hasField('field_type_action') && isset($data['field_type_action'])) {
+      $val = (string) $data['field_type_action'];
+      if (in_array($val, $allowed_type_action, TRUE)) {
+        $node->set('field_type_action', $val);
+      }
+    }
+
+    // field_nom: accepts nid (int/string) or ['target_id' => nid].
+    if ($node->hasField('field_nom') && isset($data['field_nom'])) {
+      $nom_val = $data['field_nom'];
+      $target_id = NULL;
+      if (is_numeric($nom_val)) {
+        $target_id = (int) $nom_val;
+      }
+      elseif (is_array($nom_val) && isset($nom_val['target_id'])) {
+        $target_id = (int) $nom_val['target_id'];
+      }
+      if ($target_id) {
+        $node->set('field_nom', [['target_id' => $target_id]]);
+      }
+    }
   }
 
   /**
@@ -317,25 +352,43 @@ class SmsApiController extends ControllerBase {
    */
   protected function serializeSmsNode(Node $node) : array {
     $body = $node->get('body')->first();
-    $content = $node->hasField('field_content') ? $node->get('field_content')->value : NULL;
-    $date = $node->hasField('field_date') ? $node->get('field_date')->value : NULL;
-    $dest = $node->hasField('field_numero_destinataire') ? $node->get('field_numero_destinataire')->value : NULL;
-    $sender = $node->hasField('field_numero_de_l_expediteur') ? $node->get('field_numero_de_l_expediteur')->value : NULL;
+
+    // field_nom: resolve referenced client node title.
+    $nom_nid   = NULL;
+    $nom_title = NULL;
+    if ($node->hasField('field_nom') && !$node->get('field_nom')->isEmpty()) {
+      $ref = $node->get('field_nom')->first();
+      if ($ref) {
+        $nom_nid = (int) $ref->target_id;
+        $ref_entity = $ref->entity;
+        if ($ref_entity) {
+          $nom_title = $ref_entity->label();
+        }
+      }
+    }
 
     return [
-      'nid' => (int) $node->id(),
-      'title' => $node->label(),
-      'body' => [
-        'value' => $body ? $body->value : '',
+      'nid'                          => (int) $node->id(),
+      'title'                        => $node->label(),
+      'body'                         => [
+        'value'   => $body ? $body->value   : '',
         'summary' => $body ? $body->summary : '',
-        'format' => $body ? $body->format : '',
+        'format'  => $body ? $body->format  : '',
       ],
-      'field_content' => $content,
-      'field_date' => $date,
-      'field_numero_destinataire' => $dest,
-      'field_numero_de_l_expediteur' => $sender,
-      'created' => (int) $node->getCreatedTime(),
-      'changed' => (int) $node->getChangedTime(),
+      'field_content'                => $node->hasField('field_content') ? $node->get('field_content')->value : NULL,
+      'field_date'                   => $node->hasField('field_date') ? $node->get('field_date')->value : NULL,
+      'field_numero_destinataire'    => $node->hasField('field_numero_destinataire') ? $node->get('field_numero_destinataire')->value : NULL,
+      'field_numero_de_l_expediteur' => $node->hasField('field_numero_de_l_expediteur') ? $node->get('field_numero_de_l_expediteur')->value : NULL,
+      'field_raison'                 => $node->hasField('field_raison') ? $node->get('field_raison')->value : NULL,
+      'field_reference'              => $node->hasField('field_reference') ? $node->get('field_reference')->value : NULL,
+      'field_current_solde'          => $node->hasField('field_current_solde') ? $node->get('field_current_solde')->value : NULL,
+      'field_type_action'            => $node->hasField('field_type_action') ? $node->get('field_type_action')->value : NULL,
+      'field_nom'                    => [
+        'target_id' => $nom_nid,
+        'title'     => $nom_title,
+      ],
+      'created'                      => (int) $node->getCreatedTime(),
+      'changed'                      => (int) $node->getChangedTime(),
     ];
   }
 
@@ -445,6 +498,60 @@ class SmsApiController extends ControllerBase {
     }
 
     return NULL;
+  }
+
+  /**
+   * GET /api/mz_sms/sms/last
+   *
+   * Returns the most recently created sms node.
+   * Requires authentication (token via Authorization header, cookie, or ?token=).
+   *
+   * Optional query params:
+   *   - limit (int, default 1) : number of latest records to return (max 50).
+   */
+  public function lastSms(Request $request) {
+    if (!$this->getAuthenticatedUserFromRequest($request)) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'Not allowed',
+      ], 401);
+    }
+
+    $limit = max(1, min(50, (int) ($request->query->get('limit', 1))));
+
+    $ids = \Drupal::entityQuery('node')
+      ->condition('type', 'sms')
+      ->condition('status', 1)
+      ->sort('created', 'DESC')
+      ->range(0, $limit)
+      ->accessCheck(FALSE)
+      ->execute();
+
+    if (empty($ids)) {
+      return new JsonResponse([
+        'status' => TRUE,
+        'count'  => 0,
+        'data'   => [],
+      ]);
+    }
+
+    $results = [];
+    foreach ($ids as $nid) {
+      $node = Node::load($nid);
+      if (!$node) {
+        continue;
+      }
+      $item = $this->serializeSmsNode($node);
+      $item['created_formatted'] = date('Y-m-d H:i:s', $node->getCreatedTime());
+      $item['uid'] = (int) $node->getOwnerId();
+      $results[] = $item;
+    }
+
+    return new JsonResponse([
+      'status' => TRUE,
+      'count'  => count($results),
+      'data'   => $results,
+    ]);
   }
 
 }
