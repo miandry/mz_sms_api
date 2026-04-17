@@ -328,16 +328,51 @@ class SmsApiController extends ControllerBase {
       }
     }
 
-    // field_user: accepts uid (int/string) or ['target_id' => uid].
+    // field_user: accepts uid (int), username (string), or ['target_id' => uid].
     if ($node->hasField('field_user') && isset($data['field_user'])) {
-      $user_val = $data['field_user'];
+      $user_val   = $data['field_user'];
       $target_uid = NULL;
-      if (is_numeric($user_val)) {
-        $target_uid = (int) $user_val;
-      }
-      elseif (is_array($user_val) && isset($user_val['target_id'])) {
+
+      if (is_array($user_val) && isset($user_val['target_id'])) {
+        // ['target_id' => uid]
         $target_uid = (int) $user_val['target_id'];
       }
+      elseif (is_numeric($user_val)) {
+        // Plain numeric uid.
+        $target_uid = (int) $user_val;
+      }
+      elseif (is_string($user_val) && $user_val !== '') {
+        // Username string — look up by account name; create if not found.
+        $username = trim($user_val);
+        $account  = user_load_by_name($username);
+        if ($account) {
+          $target_uid = (int) $account->id();
+        }
+        else {
+          // Create a new user with a random password and a generated email.
+          $random_password = bin2hex(random_bytes(10));
+          $fake_email      = strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $username))
+                           . '.' . substr(bin2hex(random_bytes(4)), 0, 8)
+                           . '@sms.local';
+          try {
+            $new_user = \Drupal\user\Entity\User::create([
+              'name'   => $username,
+              'mail'   => $fake_email,
+              'pass'   => $random_password,
+              'status' => 1,
+            ]);
+            $new_user->save();
+            $target_uid = (int) $new_user->id();
+          }
+          catch (\Throwable $e) {
+            \Drupal::logger('mz_sms_api')->warning(
+              'field_user: could not create user "@name": @msg',
+              ['@name' => $username, '@msg' => $e->getMessage()]
+            );
+          }
+        }
+      }
+
       if ($target_uid) {
         $node->set('field_user', [['target_id' => $target_uid]]);
       }
