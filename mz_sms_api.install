@@ -68,12 +68,6 @@ function _mz_sms_api_ensure_sms_fields() {
       'storage_settings' => ['case_sensitive' => FALSE],
       'field_settings'   => [],
     ],
-    'field_reference' => [
-      'label'            => 'Référence',
-      'type'             => 'string',
-      'storage_settings' => ['max_length' => 255, 'is_ascii' => FALSE, 'case_sensitive' => FALSE],
-      'field_settings'   => [],
-    ],
     'field_current_solde' => [
       'label'            => 'Solde actuel',
       'type'             => 'decimal',
@@ -114,6 +108,35 @@ function _mz_sms_api_ensure_sms_fields() {
         'settings'      => $def['field_settings'],
       ])->save();
     }
+  }
+
+  // field_user — entity reference to Drupal user.
+  if (!FieldStorageConfig::loadByName('node', 'field_user')) {
+    FieldStorageConfig::create([
+      'field_name'  => 'field_user',
+      'entity_type' => 'node',
+      'type'        => 'entity_reference',
+      'settings'    => ['target_type' => 'user'],
+      'cardinality' => 1,
+    ])->save();
+  }
+
+  if (!FieldConfig::loadByName('node', 'sms', 'field_user')) {
+    FieldConfig::create([
+      'field_storage' => FieldStorageConfig::loadByName('node', 'field_user'),
+      'bundle'        => 'sms',
+      'label'         => 'Utilisateur',
+      'required'      => FALSE,
+      'settings'      => [
+        'handler'          => 'default:user',
+        'handler_settings' => [
+          'include_anonymous' => FALSE,
+          'filter'            => ['type' => '_none'],
+          'sort'              => ['field' => '_none'],
+          'auto_create'       => FALSE,
+        ],
+      ],
+    ])->save();
   }
 
   // field_nom — entity reference to client node bundle.
@@ -161,5 +184,28 @@ function mz_sms_api_update_10001() {
 function mz_sms_api_update_10002() {
   _mz_sms_api_ensure_sms_fields();
   return t('New SMS fields added: raison, nom, type_action, reference, current_solde.');
+}
+
+/**
+ * Add field_user (entity reference to Drupal user).
+ */
+function mz_sms_api_update_10003() {
+  _mz_sms_api_ensure_sms_fields();
+  return t('field_user added to sms content type.');
+}
+
+/**
+ * Remove field_reference from sms content type.
+ */
+function mz_sms_api_update_10004() {
+  $field_config = \Drupal\field\Entity\FieldConfig::loadByName('node', 'sms', 'field_reference');
+  if ($field_config) {
+    $field_config->delete();
+  }
+  $storage = \Drupal\field\Entity\FieldStorageConfig::loadByName('node', 'field_reference');
+  if ($storage && empty($storage->getBundles())) {
+    $storage->delete();
+  }
+  return t('field_reference removed from sms content type.');
 }
 

@@ -315,9 +315,6 @@ class SmsApiController extends ControllerBase {
       $node->set('field_raison', [['value' => (string) $data['field_raison']]]);
     }
 
-    if ($node->hasField('field_reference') && isset($data['field_reference'])) {
-      $node->set('field_reference', (string) $data['field_reference']);
-    }
 
     if ($node->hasField('field_current_solde') && isset($data['field_current_solde'])) {
       $node->set('field_current_solde', (string) $data['field_current_solde']);
@@ -328,6 +325,21 @@ class SmsApiController extends ControllerBase {
       $val = (string) $data['field_type_action'];
       if (in_array($val, $allowed_type_action, TRUE)) {
         $node->set('field_type_action', $val);
+      }
+    }
+
+    // field_user: accepts uid (int/string) or ['target_id' => uid].
+    if ($node->hasField('field_user') && isset($data['field_user'])) {
+      $user_val = $data['field_user'];
+      $target_uid = NULL;
+      if (is_numeric($user_val)) {
+        $target_uid = (int) $user_val;
+      }
+      elseif (is_array($user_val) && isset($user_val['target_id'])) {
+        $target_uid = (int) $user_val['target_id'];
+      }
+      if ($target_uid) {
+        $node->set('field_user', [['target_id' => $target_uid]]);
       }
     }
 
@@ -367,6 +379,20 @@ class SmsApiController extends ControllerBase {
       }
     }
 
+    // field_user: resolve referenced Drupal user.
+    $user_uid  = NULL;
+    $user_name = NULL;
+    if ($node->hasField('field_user') && !$node->get('field_user')->isEmpty()) {
+      $user_ref = $node->get('field_user')->first();
+      if ($user_ref) {
+        $user_uid = (int) $user_ref->target_id;
+        $user_entity = $user_ref->entity;
+        if ($user_entity) {
+          $user_name = $user_entity->getAccountName();
+        }
+      }
+    }
+
     return [
       'nid'                          => (int) $node->id(),
       'title'                        => $node->label(),
@@ -380,12 +406,15 @@ class SmsApiController extends ControllerBase {
       'field_numero_destinataire'    => $node->hasField('field_numero_destinataire') ? $node->get('field_numero_destinataire')->value : NULL,
       'field_numero_de_l_expediteur' => $node->hasField('field_numero_de_l_expediteur') ? $node->get('field_numero_de_l_expediteur')->value : NULL,
       'field_raison'                 => $node->hasField('field_raison') ? $node->get('field_raison')->value : NULL,
-      'field_reference'              => $node->hasField('field_reference') ? $node->get('field_reference')->value : NULL,
       'field_current_solde'          => $node->hasField('field_current_solde') ? $node->get('field_current_solde')->value : NULL,
       'field_type_action'            => $node->hasField('field_type_action') ? $node->get('field_type_action')->value : NULL,
       'field_nom'                    => [
         'target_id' => $nom_nid,
         'title'     => $nom_title,
+      ],
+      'field_user'                   => [
+        'target_id' => $user_uid,
+        'name'      => $user_name,
       ],
       'created'                      => (int) $node->getCreatedTime(),
       'changed'                      => (int) $node->getChangedTime(),
