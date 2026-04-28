@@ -5,9 +5,7 @@ namespace Drupal\mz_sms_api\Controller;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\node\Entity\Node;
 use Drupal\user\Entity\User;
-use Drupal\user\UserInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Cookie;
 use Symfony\Component\HttpFoundation\Request;
 
 /**
@@ -16,7 +14,12 @@ use Symfony\Component\HttpFoundation\Request;
 class SmsApiController extends ControllerBase {
 
   /**
-   * Login API for Drupal users.
+   * Role machine name required for every SMS API operation (including login).
+   */
+  protected const SMS_MANAGER_ROLE = 'sms_manager';
+
+  /**
+   * Login API for Drupal users (requires sms_manager role).
    *
    * Payload:
    * - name: username
@@ -56,11 +59,24 @@ class SmsApiController extends ControllerBase {
       ], 401);
     }
 
+    if (!$this->userHasSmsManagerRole($user)) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => 'SMS manager role required',
+      ], 403);
+    }
+
     user_login_finalize($user);
+
+    $api_token = NULL;
+    if ($user->hasField('field_api_token') && !$user->get('field_api_token')->isEmpty()) {
+      $api_token = $user->get('field_api_token')->value;
+    }
 
     $response_data = [
       'status' => TRUE,
       'message' => 'Login successful',
+      'field_api_token' => $api_token,
       'user' => [
         'uid' => (int) $user->id(),
         'name' => $user->getAccountName(),
@@ -68,29 +84,7 @@ class SmsApiController extends ControllerBase {
         'roles' => $user->getRoles(),
       ],
     ];
-    $response = new JsonResponse($response_data);
-
-    // Stable permanent token for cookie, auth_token, and token (KeyValue-backed).
-    $permanent = $this->getOrCreatePermanentAuthToken($user);
-    if (is_string($permanent) && $permanent !== '') {
-      $response_data['auth_token'] = $permanent;
-      $response_data['token'] = $permanent;
-      $response->setData($response_data);
-      // Long-lived cookie (10 years); value does not rotate unless KeyValue entry is cleared.
-      $response->headers->setCookie(new Cookie(
-        'auth_token',
-        $permanent,
-        time() + (10 * 365 * 24 * 3600),
-        '/',
-        NULL,
-        FALSE,
-        TRUE,
-        FALSE,
-        'Lax'
-      ));
-    }
-
-    return $response;
+    return new JsonResponse($response_data);
   }
 
   /**
@@ -481,98 +475,84 @@ class SmsApiController extends ControllerBase {
   }
 
   /**
-   * Resolve authenticated user from bearer token/cookie.
+   * Resolve user from token (field_api_token) with sms_manager role.
+   *
+   * Accepts token from:
+   * - Query: ?token=
+   * - POST body (application/x-www-form-urlencoded): token=
+   * - JSON body: "token": "..."
    */
   protected function getAuthenticatedUserFromRequest(Request $request) {
-    // 1) Authorization: Bearer <token>
-    $token = $request->headers->get('Authorization');
-    if (is_string($token) && preg_match('/Bearer\s+(.+)/i', $token, $matches)) {
-      $token = trim($matches[1]);
-    }
-    else {
-      $token = NULL;
-    }
-
-    // 2) HTTP-only cookie fallback.
-    if (!$token) {
-      $token = $request->cookies->get('auth_token');
-    }
-
-    // 3) Raw token in POST/body/query (token= or auth_token=).
-    if (!$token) {
+    $token = (string) $request->query->get('token', '');
+    if ($token === '') {
       $token = (string) $request->request->get('token', '');
     }
-    if (!$token) {
-      $token = (string) $request->query->get('token', '');
-    }
-    if (!$token) {
-      $token = (string) $request->request->get('auth_token', '');
-    }
-    if (!$token) {
-      $token = (string) $request->query->get('auth_token', '');
-    }
-    if (!$token) {
+    if ($token === '') {
       $payload = $this->decodeJson($request);
-      if (is_array($payload)) {
-        if (!empty($payload['token'])) {
-          $token = (string) $payload['token'];
-        }
-        elseif (!empty($payload['auth_token'])) {
-          $token = (string) $payload['auth_token'];
-        }
+      if (is_array($payload) && isset($payload['token']) && $payload['token'] !== '') {
+        $token = (string) $payload['token'];
       }
     }
 
-    if (!$token) {
-      return NULL;
-    }
-
-    return $this->getUserByPermanentAuthToken($token);
+    return $this->getSmsApiAuthenticatedUser(trim($token));
   }
 
   /**
-   * Returns stable KeyValue-backed token; created once per user, reused on later logins.
+   * Whether the account may use the SMS API (sms_manager role).
    */
-  protected function getOrCreatePermanentAuthToken(UserInterface $user) : ?string {
-    if (!$user->id()) {
-      return NULL;
-    }
-    $store = \Drupal::keyValue('mz_sms_api.permanent_auth');
-    $uid_key = 'uid:' . $user->id();
-    $token = $store->get($uid_key);
-    if (is_string($token) && $token !== '') {
-      return $token;
-    }
-    $token = bin2hex(random_bytes(32));
-    $store->set($uid_key, $token);
-    $store->set('tok:' . $token, (int) $user->id());
-    return $token;
+  protected function userHasSmsManagerRole($account) : bool {
+    return $account && $account->id() && $account->hasRole(static::SMS_MANAGER_ROLE);
   }
 
   /**
-   * Resolves user from permanent auth token.
+   * User from field_api_token token who also has sms_manager role.
    */
-  protected function getUserByPermanentAuthToken(string $token) {
+  protected function getSmsApiAuthenticatedUser(string $token) {
+    $user = $this->getUserByFieldApiToken($token);
+    if (!$user || !$this->userHasSmsManagerRole($user)) {
+      return NULL;
+    }
+    return $user;
+  }
+
+  /**
+   * Loads an active user whose field_api_token equals the given value.
+   */
+  protected function getUserByFieldApiToken(string $token) {
     if ($token === '') {
       return NULL;
     }
-    $store = \Drupal::keyValue('mz_sms_api.permanent_auth');
-    $uid = $store->get('tok:' . $token);
-    if (!$uid) {
+
+    $defs = \Drupal::service('entity_field.manager')->getFieldDefinitions('user', 'user');
+    if (!isset($defs['field_api_token'])) {
       return NULL;
     }
-    $account = User::load((int) $uid);
-    if (!$account || !$account->isActive()) {
+
+    $uids = \Drupal::entityQuery('user')
+      ->condition('field_api_token', $token)
+      ->condition('status', 1)
+      ->accessCheck(FALSE)
+      ->range(0, 1)
+      ->execute();
+
+    if (empty($uids)) {
       return NULL;
     }
-    return $account;
+
+    $user = User::load((int) reset($uids));
+    if (!$user || !$user->isActive()) {
+      return NULL;
+    }
+
+    return $user;
   }
 
   /**
    * GET /api/mz_sms/sms/last
    *
    * Returns the most recently created sms node.
-   * Requires authentication (token via Authorization header, cookie, or ?token=).
+   * Requires authentication: ?token= or JSON/form body key "token" matching user
+   * field_api_token; user must have the sms_manager role.
    *
    * Optional query params:
    *   - limit (int, default 1) : number of latest records to return (max 50).

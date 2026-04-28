@@ -8,6 +8,7 @@
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\node\Entity\NodeType;
+use Drupal\user\Entity\Role;
 
 /**
  * Implements hook_install().
@@ -15,6 +16,8 @@ use Drupal\node\Entity\NodeType;
 function mz_sms_api_install() {
   _mz_sms_api_ensure_sms_type();
   _mz_sms_api_ensure_sms_fields();
+  _mz_sms_api_ensure_user_field_api_token();
+  _mz_sms_api_ensure_sms_manager_role();
 }
 
 /**
@@ -169,6 +172,44 @@ function _mz_sms_api_ensure_sms_fields() {
 }
 
 /**
+ * Ensures user field field_api_token for SMS API authentication.
+ */
+function _mz_sms_api_ensure_user_field_api_token() {
+  if (!FieldStorageConfig::loadByName('user', 'field_api_token')) {
+    FieldStorageConfig::create([
+      'field_name' => 'field_api_token',
+      'entity_type' => 'user',
+      'type' => 'string_long',
+      'settings' => ['case_sensitive' => TRUE],
+      'cardinality' => 1,
+    ])->save();
+  }
+
+  if (!FieldConfig::loadByName('user', 'user', 'field_api_token')) {
+    FieldConfig::create([
+      'field_storage' => FieldStorageConfig::loadByName('user', 'field_api_token'),
+      'bundle' => 'user',
+      'label' => 'API token',
+      'description' => 'Used by mz_sms_api. Pass the same value as ?token= or JSON key "token".',
+      'required' => FALSE,
+      'settings' => [],
+    ])->save();
+  }
+}
+
+/**
+ * Ensures the sms_manager role exists (required for all mz_sms_api actions).
+ */
+function _mz_sms_api_ensure_sms_manager_role() {
+  if (!Role::load('sms_manager')) {
+    Role::create([
+      'id' => 'sms_manager',
+      'label' => 'SMS manager',
+    ])->save();
+  }
+}
+
+/**
  * Update existing sites — initial fields.
  */
 function mz_sms_api_update_10001() {
@@ -207,5 +248,21 @@ function mz_sms_api_update_10004() {
     $storage->delete();
   }
   return t('field_reference removed from sms content type.');
+}
+
+/**
+ * Add user field field_api_token for API requests.
+ */
+function mz_sms_api_update_10005() {
+  _mz_sms_api_ensure_user_field_api_token();
+  return t('User field field_api_token added for SMS API authentication.');
+}
+
+/**
+ * Add sms_manager role for SMS API access control.
+ */
+function mz_sms_api_update_10006() {
+  _mz_sms_api_ensure_sms_manager_role();
+  return t('SMS manager role created for mz_sms_api.');
 }
 
