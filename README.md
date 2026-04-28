@@ -36,7 +36,7 @@ Les mises à jour de base (ex. `field_date` en datetime date+heure, suppression 
 |-----|------|-------------|
 | `body` | Texte formaté (long) | Corps avec résumé optionnel |
 | `field_content` | Texte brut (long) | Contenu texte |
-| `field_date` | **Datetime** | Définie **manuellement** dans le JSON. Aucune normalisation automatique côté module : utiliser un format valide pour le champ datetime Drupal (souvent `Y-m-d\TH:i:s`). Anti-doublon par **égalité exacte** ; tri **`GET …/last`** |
+| `field_date` | **Datetime** (date **et** heure) | Envoyée en JSON puis **normalisée en UTC** (`Y-m-d\TH:i:s`) comme le champ Drupal. Anti-doublon et tri **`GET …/last`** sur cette valeur stockée |
 | `field_numero_destinataire` | Texte | Numéro destinataire |
 | `field_numero_de_l_expediteur` | Texte | Numéro expéditeur |
 | `field_raison` | Texte long | Raison / détail |
@@ -112,9 +112,11 @@ Réutiliser **`field_api_token`** comme **`token`** sur les autres appels.
 
 ## Champ `field_date` (API)
 
-- Envoyer **`field_date`** dans le corps JSON avec la chaîne exacte à enregistrer (espaces de tête/queue supprimés par le module, rien d’autre).
-- Aucun **formatage automatique** (pas de normalisation ISO, pas de date déduite depuis **`field_content`**). Le client est responsable du format compatible avec le stockage Drupal datetime.
-- Sans **`field_date`** dans la requête de création, le nœud peut être créé sans cette valeur ; l’**anti-doublon** ne s’applique alors pas (pas de comparaison).
+- **`field_date`** = **date avec heure** (champ Drupal *datetime* : un instant, pas une date seule).
+- Vous pouvez envoyer un format **souple** (ex. `2026-04-28 11:07:00` ou ISO avec décalage) : le module le **convertit** en format de stockage Drupal : **UTC**, chaîne **`Y-m-d\TH:i:s`** (ex. `2026-04-28T09:07:00`). C’est la même valeur que celle utilisée en base, pour l’**anti-doublon** et le tri **`/last`**.
+- Si la chaîne est **déjà** au format de stockage UTC, elle est acceptée telle quelle.
+- Si la date est **invalide** → **400** `Invalid field_date` (création / mise à jour avec `field_date` renseigné).
+- Sans **`field_date`** dans la requête de création, le nœud peut exister sans cette valeur ; l’**anti-doublon** ne s’applique pas.
 
 ---
 
@@ -122,7 +124,7 @@ Réutiliser **`field_api_token`** comme **`token`** sur les autres appels.
 
 ### Anti-doublon
 
-Pour un même auteur (`uid`), si un autre nœud **`sms`** existe déjà avec **exactement la même valeur `field_date`** (après trim) que dans la requête de création, la réponse est **200** (pas 201) :
+Pour un même auteur (`uid`), si un autre nœud **`sms`** existe déjà avec la **même `field_date` normalisée** (format de stockage UTC Drupal, identique à celle enregistrée en base) que celle obtenue à partir de la requête, la réponse est **200** (pas 201) :
 
 ```json
 {

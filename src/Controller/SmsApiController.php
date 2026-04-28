@@ -2,7 +2,10 @@
 
 namespace Drupal\mz_sms_api\Controller;
 
+use Drupal\Component\Datetime\DateTimePlus;
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Datetime\DrupalDateTime;
+use Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface;
 use Drupal\node\Entity\Node;
 use Drupal\user\Entity\User;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -175,10 +178,18 @@ class SmsApiController extends ControllerBase {
       $payload = $data;
       unset($payload['token']);
 
-      // Anti-doublon : même valeur field_date (telle qu’envoyée) pour le même auteur.
+      // Anti-doublon : même instant field_date (après normalisation stockage UTC Drupal) pour le même auteur.
       $fd = isset($payload['field_date']) ? trim((string) $payload['field_date']) : '';
       if ($fd !== '') {
-        $existing = $this->findExistingSmsByFieldDateTime((int) $auth_user->id(), $fd);
+        $normalized = $this->normalizeFieldDateToUtcStorage($fd);
+        if ($normalized === NULL) {
+          return new JsonResponse([
+            'status' => FALSE,
+            'message' => 'Invalid field_date',
+          ], 400);
+        }
+        $payload['field_date'] = $normalized;
+        $existing = $this->findExistingSmsByFieldDateTime((int) $auth_user->id(), $normalized);
         if ($existing) {
           return new JsonResponse([
             'status' => TRUE,
@@ -204,6 +215,12 @@ class SmsApiController extends ControllerBase {
         'duplicate' => FALSE,
         'item' => $this->serializeSmsNode($node),
       ], 201);
+    }
+    catch (\InvalidArgumentException $e) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => $e->getMessage(),
+      ], 400);
     }
     catch (\Throwable $e) {
       return new JsonResponse([
@@ -249,6 +266,12 @@ class SmsApiController extends ControllerBase {
         'message' => 'SMS updated',
         'item' => $this->serializeSmsNode($node),
       ]);
+    }
+    catch (\InvalidArgumentException $e) {
+      return new JsonResponse([
+        'status' => FALSE,
+        'message' => $e->getMessage(),
+      ], 400);
     }
     catch (\Throwable $e) {
       return new JsonResponse([
@@ -315,10 +338,15 @@ class SmsApiController extends ControllerBase {
       $node->set('field_content', [['value' => (string) $data['field_content']]]);
     }
 
+    // field_date: datetime — normalize to Drupal UTC storage (Y-m-d\TH:i:s) so DB, tri et anti-doublon cohérents.
     if ($node->hasField('field_date') && isset($data['field_date'])) {
       $v = trim((string) $data['field_date']);
       if ($v !== '') {
-        $node->set('field_date', $v);
+        $normalized = $this->normalizeFieldDateToUtcStorage($v);
+        if ($normalized === NULL) {
+          throw new \InvalidArgumentException('Invalid field_date');
+        }
+        $node->set('field_date', $normalized);
       }
     }
 
@@ -411,6 +439,40 @@ class SmsApiController extends ControllerBase {
         $node->set('field_nom', [['target_id' => $target_id]]);
       }
     }
+  }
+
+  /**
+   * Converts API date/time input to Drupal datetime storage (UTC, Y-m-d\\TH:i:s).
+   *
+   * Accepts strings already in storage format, ISO strings with offset, or typical
+   * PHP-parsable dates interpreted in the site default timezone when unambiguous.
+   *
+   * @return string|null
+   *   The normalized value, or NULL if the input is invalid.
+   */
+  protected function normalizeFieldDateToUtcStorage(string $input) : ?string {
+    $input = trim($input);
+    if ($input === '') {
+      return NULL;
+    }
+    $tzUtc = new \DateTimeZone(DateTimeItemInterface::STORAGE_TIMEZONE);
+    $format = DateTimeItemInterface::DATETIME_STORAGE_FORMAT;
+    try {
+      $d = DateTimePlus::createFromFormat($format, $input, $tzUtc);
+      return $d->format($format);
+    }
+    catch (\Exception $e) {
+      if (!($e instanceof \InvalidArgumentException) && !($e instanceof \UnexpectedValueException)) {
+        throw $e;
+      }
+      // Fall through to flexible parse.
+    }
+    $dt = new DrupalDateTime($input, date_default_timezone_get());
+    if ($dt->hasErrors()) {
+      return NULL;
+    }
+    $dt->setTimezone($tzUtc);
+    return $dt->format($format);
   }
 
   /**
@@ -568,7 +630,7 @@ class SmsApiController extends ControllerBase {
   }
 
   /**
-   * Finds an sms node with the same field_date value for this author (exact match).
+   * Finds an sms node with the same field_date (date+time) for this author (exact string match).
    */
   protected function findExistingSmsByFieldDateTime(int $uid, string $storage_value) {
     $storage_value = trim($storage_value);
@@ -601,7 +663,7 @@ class SmsApiController extends ControllerBase {
   /**
    * GET /api/mz_sms/sms/last
    *
-   * Returns published sms nodes with the latest field_date (SMS logical time),
+   * Returns published sms nodes with the latest field_date (datetime: date + time),
    * sorted by field_date descending (not by Drupal created).
    *
    * Requires authentication: ?token= or JSON/form body key "token" matching user
