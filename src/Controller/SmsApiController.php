@@ -4,6 +4,8 @@ namespace Drupal\mz_sms_api\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\node\Entity\Node;
+use Drupal\user\Entity\User;
+use Drupal\user\UserInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Cookie;
 use Symfony\Component\HttpFoundation\Request;
@@ -68,14 +70,17 @@ class SmsApiController extends ControllerBase {
     ];
     $response = new JsonResponse($response_data);
 
-    $token = $this->generateBearerTokenForUser($user);
-    if (is_string($token) && $token !== '') {
-      $response_data['token'] = $token;
+    // Stable permanent token for cookie, auth_token, and token (KeyValue-backed).
+    $permanent = $this->getOrCreatePermanentAuthToken($user);
+    if (is_string($permanent) && $permanent !== '') {
+      $response_data['auth_token'] = $permanent;
+      $response_data['token'] = $permanent;
       $response->setData($response_data);
+      // Long-lived cookie (10 years); value does not rotate unless KeyValue entry is cleared.
       $response->headers->setCookie(new Cookie(
         'auth_token',
-        $token,
-        time() + (30 * 24 * 3600),
+        $permanent,
+        time() + (10 * 365 * 24 * 3600),
         '/',
         NULL,
         FALSE,
@@ -476,32 +481,6 @@ class SmsApiController extends ControllerBase {
   }
 
   /**
-   * Generate a bearer token using available auth services.
-   */
-  protected function generateBearerTokenForUser($user) : ?string {
-    foreach (['api_solutions.api_crud', 'api.crud'] as $service_id) {
-      if (!\Drupal::getContainer()->has($service_id)) {
-        continue;
-      }
-      $service = \Drupal::service($service_id);
-      if (method_exists($service, 'generateBearerToken')) {
-        $token = $service->generateBearerToken($user);
-        if (is_string($token) && $token !== '') {
-          return $token;
-        }
-      }
-      if (method_exists($service, 'generateToken')) {
-        $token = $service->generateToken($user);
-        if (is_string($token) && $token !== '') {
-          return $token;
-        }
-      }
-    }
-
-    return NULL;
-  }
-
-  /**
    * Resolve authenticated user from bearer token/cookie.
    */
   protected function getAuthenticatedUserFromRequest(Request $request) {
@@ -519,7 +498,7 @@ class SmsApiController extends ControllerBase {
       $token = $request->cookies->get('auth_token');
     }
 
-    // 3) Raw token in POST/body/query (token=...).
+    // 3) Raw token in POST/body/query (token= or auth_token=).
     if (!$token) {
       $token = (string) $request->request->get('token', '');
     }
@@ -527,9 +506,20 @@ class SmsApiController extends ControllerBase {
       $token = (string) $request->query->get('token', '');
     }
     if (!$token) {
+      $token = (string) $request->request->get('auth_token', '');
+    }
+    if (!$token) {
+      $token = (string) $request->query->get('auth_token', '');
+    }
+    if (!$token) {
       $payload = $this->decodeJson($request);
-      if (is_array($payload) && !empty($payload['token'])) {
-        $token = (string) $payload['token'];
+      if (is_array($payload)) {
+        if (!empty($payload['token'])) {
+          $token = (string) $payload['token'];
+        }
+        elseif (!empty($payload['auth_token'])) {
+          $token = (string) $payload['auth_token'];
+        }
       }
     }
 
@@ -537,31 +527,45 @@ class SmsApiController extends ControllerBase {
       return NULL;
     }
 
-    foreach (['api_solutions.api_crud', 'api.crud'] as $service_id) {
-      if (!\Drupal::getContainer()->has($service_id)) {
-        continue;
-      }
-      $service = \Drupal::service($service_id);
-      if (method_exists($service, 'validateBearerToken')) {
-        $user = $service->validateBearerToken($token);
-        if ($user) {
-          return $user;
-        }
-      }
-      if (method_exists($service, 'getUserByToken')) {
-        $user = $service->getUserByToken($token);
-        if ($user) {
-          return $user;
-        }
-      }
-      if (method_exists($service, 'isTokenValid') && method_exists($service, 'getUserByToken')) {
-        if ($service->isTokenValid($token)) {
-          return $service->getUserByToken($token);
-        }
-      }
-    }
+    return $this->getUserByPermanentAuthToken($token);
+  }
 
-    return NULL;
+  /**
+   * Returns stable KeyValue-backed token; created once per user, reused on later logins.
+   */
+  protected function getOrCreatePermanentAuthToken(UserInterface $user) : ?string {
+    if (!$user->id()) {
+      return NULL;
+    }
+    $store = \Drupal::keyValue('mz_sms_api.permanent_auth');
+    $uid_key = 'uid:' . $user->id();
+    $token = $store->get($uid_key);
+    if (is_string($token) && $token !== '') {
+      return $token;
+    }
+    $token = bin2hex(random_bytes(32));
+    $store->set($uid_key, $token);
+    $store->set('tok:' . $token, (int) $user->id());
+    return $token;
+  }
+
+  /**
+   * Resolves user from permanent auth token.
+   */
+  protected function getUserByPermanentAuthToken(string $token) {
+    if ($token === '') {
+      return NULL;
+    }
+    $store = \Drupal::keyValue('mz_sms_api.permanent_auth');
+    $uid = $store->get('tok:' . $token);
+    if (!$uid) {
+      return NULL;
+    }
+    $account = User::load((int) $uid);
+    if (!$account || !$account->isActive()) {
+      return NULL;
+    }
+    return $account;
   }
 
   /**
