@@ -1,62 +1,24 @@
 # MZ SMS API
 
-Drupal custom module that exposes a JSON API for **`sms`** nodes (create, read, update, delete, list, latest). Authentication uses the **`field_api_token`** value on the Drupal user account and requires the **`sms_manager`** role.
+Module Drupal personnalisé : API JSON pour le type de contenu **`sms`** (création, lecture, mise à jour, suppression, liste, derniers par date métier).
+
+**Authentification** : le compte Drupal doit avoir le rôle **`sms_manager`** et une valeur secrète dans le champ utilisateur **`field_api_token`**. Le client envoie ce secret en paramètre **`token`** (query, formulaire ou JSON) — pas de cookie ni d’en-tête `Authorization: Bearer` géré par ce module.
 
 ---
 
-## Requirements
+## Prérequis
 
-- Drupal **9** or **10**
-- Module dependencies: `node`, `user`, `field`, `text`, `datetime`
+- Drupal **9** ou **10**
+- Dépendances : `node`, `user`, `field`, `text`, `datetime`
 
-On enable / updates, the module ensures:
+Après activation / mises à jour, le module assure notamment :
 
-- Content type **`sms`** and its fields (see below)
-- User field **`field_api_token`** (`string_long`, case-sensitive)
-- Role **`sms_manager`** (machine name: `sms_manager`)
+- le type **`sms`** et ses champs (voir ci-dessous) ;
+- le champ utilisateur **`field_api_token`** (`string_long`, sensible à la casse) ;
+- le rôle **`sms_manager`**.
 
-Assign **SMS manager** to accounts that may call the API, and set a secret **API token** on each user (`field_api_token`). The token is **not** generated automatically by login; store it in the user profile (or via custom logic).
-
----
-
-## Content type: `sms`
-
-### Fields
-
-| Field name | Type | Description |
-|------------|------|-------------|
-| `body` | Text (formatted, long) | Body with optional summary |
-| `field_content` | Plain text, long | Plain text content |
-| `field_date` | Date | Date of the SMS |
-| `field_numero_destinataire` | Text | Recipient number |
-| `field_numero_de_l_expediteur` | Text | Sender number |
-| `field_raison` | Plain text, long | Reason / notes |
-| `field_nom` | Entity reference → `client` | Client node |
-| `field_user` | Entity reference → **user** | Related Drupal user |
-| `field_type_action` | List (string) | One of: `transfer`, `recu`, `depot` |
-| `field_current_solde` | Decimal (18,2) | Current balance |
-
-The `field_reference` field was removed in a prior update; do not rely on it in payloads.
-
----
-
-## Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/mz_sms/login` | Password login (requires `sms_manager`); returns user info and `field_api_token` |
-| `GET` | `/api/mz_sms/sms` | List SMS (paginated) |
-| `GET` | `/api/mz_sms/sms/last` | Latest SMS node(s) by creation time |
-| `GET` | `/api/mz_sms/sms/{nid}` | View one SMS |
-| `POST` | `/api/mz_sms/sms` | Create SMS |
-| `PUT` / `PATCH` | `/api/mz_sms/sms/{nid}` | Update SMS |
-| `DELETE` | `/api/mz_sms/sms/{nid}` | Delete SMS |
-
-Route **`/api/mz_sms/sms/last`** is registered before **`/api/mz_sms/sms/{nid}`** so `last` is never parsed as a node ID.
-
----
-
-## Installation
+1. Attribuer le rôle **SMS manager** aux comptes API.  
+2. Renseigner **`field_api_token`** sur chaque compte (interface Drupal ou autre). La valeur n’est **pas** générée automatiquement à la connexion : le login la **renvoie** telle qu’enregistrée (ou `null` si vide).
 
 ```bash
 drush en mz_sms_api -y
@@ -64,65 +26,77 @@ drush updb -y
 drush cr
 ```
 
-Then in the admin UI:
-
-1. Assign the **SMS manager** role (`sms_manager`) to API users.
-2. Set **`field_api_token`** on each account to a unique secret string.
+Les mises à jour de base (ex. `field_date` en datetime date+heure, suppression de `field_heure`) s’appliquent via **`drush updb`**.
 
 ---
 
-## Authentication and roles
+## Champs du type `sms`
 
-Every SMS API action (including login) requires the **`sms_manager`** role.
+| Nom | Type | Description |
+|-----|------|-------------|
+| `body` | Texte formaté (long) | Corps avec résumé optionnel |
+| `field_content` | Texte brut (long) | Contenu texte |
+| `field_date` | **Datetime** | Définie **manuellement** dans le JSON. Aucune normalisation automatique côté module : utiliser un format valide pour le champ datetime Drupal (souvent `Y-m-d\TH:i:s`). Anti-doublon par **égalité exacte** ; tri **`GET …/last`** |
+| `field_numero_destinataire` | Texte | Numéro destinataire |
+| `field_numero_de_l_expediteur` | Texte | Numéro expéditeur |
+| `field_raison` | Texte long | Raison / détail |
+| `field_nom` | Référence → bundle **`client`** | Client |
+| `field_user` | Référence → **user** | Utilisateur Drupal lié |
+| `field_type_action` | Liste | `transfer`, `recu`, `depot` |
+| `field_current_solde` | Décimal | Solde |
 
-For **`POST /api/mz_sms/login`**, valid credentials without that role yield **403** with `"SMS manager role required"`.
-
-For all other endpoints, the caller must prove possession of the API token configured on the user:
-
-- The server looks up an **active** user whose **`field_api_token`** matches the submitted value **and** who has **`sms_manager`**.
-
-### Sending the token
-
-Only these are supported (checked in order until a non-empty token is found):
-
-| Source | How |
-|--------|-----|
-| Query string | `?token=YOUR_SECRET` |
-| Form POST | Body parameter `token` (`application/x-www-form-urlencoded` or multipart) |
-| JSON body | Property `"token"` alongside your other JSON fields |
-
-**Not** supported: `Authorization: Bearer`, cookies named `auth_token`, or a separate JSON key `auth_token`.
-
-If authentication fails, responses typically look like:
-
-```json
-{ "status": false, "message": "Not allowed" }
-```
-
-with HTTP **401**.
+Le champ **`field_heure`** a été retiré : date et heure sont **unifiées** dans **`field_date`**.
 
 ---
 
-## Login
+## Points de terminaison
 
-`POST /api/mz_sms/login`
+| Méthode | Chemin | Rôle |
+|---------|--------|------|
+| `POST` | `/api/mz_sms/login` | Connexion ; réponse inclut `field_api_token` si renseigné |
+| `GET` | `/api/mz_sms/sms` | Liste paginée (tri par **date de création** Drupal, `created` DESC) |
+| `GET` | `/api/mz_sms/sms/last` | Derniers SMS **par `field_date`** (instant métier) DESC, puis `nid` DESC ; uniquement les nœuds **publiés** avec `field_date` non vide |
+| `GET` | `/api/mz_sms/sms/{nid}` | Détail d’un SMS |
+| `POST` | `/api/mz_sms/sms` | Création |
+| `PUT` / `PATCH` | `/api/mz_sms/sms/{nid}` | Mise à jour |
+| `DELETE` | `/api/mz_sms/sms/{nid}` | Suppression |
 
-**Request body (JSON):**
+La route **`/api/mz_sms/sms/last`** est déclarée **avant** `/api/mz_sms/sms/{nid}` pour que `last` ne soit pas interprété comme un `nid`.
+
+---
+
+## Authentification et rôle `sms_manager`
+
+Toutes les actions API (y compris le login) exigent le rôle **`sms_manager`**.
+
+- Login incorrect → **401**. Compte sans ce rôle après mot de passe valide → **403**, message du type `SMS manager role required`.
+- Autres routes : utiliser **`token`** égal à la valeur de **`field_api_token`** du compte (utilisateur actif + `sms_manager`). Sinon → **401** avec `{ "status": false, "message": "Not allowed" }`.
+
+**Où passer `token` (ordre de lecture côté serveur)** :
+
+| Source | Détail |
+|--------|--------|
+| Query | `?token=…` |
+| Corps formulaire | paramètre `token` |
+| JSON | propriété `"token"` |
+
+Non pris en charge : `Authorization: Bearer`, cookie `auth_token`, clé JSON `auth_token`.
+
+---
+
+## Login — `POST /api/mz_sms/login`
 
 ```json
-{
-  "name": "sms_operator",
-  "password": "your-password"
-}
+{ "name": "sms_operator", "password": "your-password" }
 ```
 
-**Successful response (200):**
+Réponse réussie (**200**) :
 
 ```json
 {
   "status": true,
   "message": "Login successful",
-  "field_api_token": "the-value-from-user-profile-or-null",
+  "field_api_token": "secret-or-null",
   "user": {
     "uid": 5,
     "name": "sms_operator",
@@ -132,268 +106,98 @@ with HTTP **401**.
 }
 ```
 
-`field_api_token` mirrors the **`field_api_token`** field on the user ( **`null`** if empty). Use that same value as **`token`** on subsequent API calls (query or JSON body).
-
-**Typical errors:**
-
-| HTTP | Meaning |
-|------|---------|
-| 400 | Invalid JSON or missing `name` / `password` |
-| 401 | Wrong username/password or inactive user |
-| 403 | Valid login but account lacks **`sms_manager`** |
+Réutiliser **`field_api_token`** comme **`token`** sur les autres appels.
 
 ---
 
-## Examples
+## Champ `field_date` (API)
 
-Assume the site runs at `https://drupal.local` (replace with your origin). Replace `YOUR_SECRET` with the value saved in **`field_api_token`** for your user.
+- Envoyer **`field_date`** dans le corps JSON avec la chaîne exacte à enregistrer (espaces de tête/queue supprimés par le module, rien d’autre).
+- Aucun **formatage automatique** (pas de normalisation ISO, pas de date déduite depuis **`field_content`**). Le client est responsable du format compatible avec le stockage Drupal datetime.
+- Sans **`field_date`** dans la requête de création, le nœud peut être créé sans cette valeur ; l’**anti-doublon** ne s’applique alors pas (pas de comparaison).
 
-### Bash: login, then call the API with `token` in the URL
+---
 
-```bash
-BASE="https://drupal.local"
+## Création — `POST /api/mz_sms/sms`
 
-# 1) Login (JSON body is only name + password)
-curl -s -X POST "$BASE/api/mz_sms/login" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"sms_operator","password":"your-password"}'
+### Anti-doublon
 
-# Response includes field_api_token — use that same string as TOKEN below.
+Pour un même auteur (`uid`), si un autre nœud **`sms`** existe déjà avec **exactement la même valeur `field_date`** (après trim) que dans la requête de création, la réponse est **200** (pas 201) :
 
-TOKEN="YOUR_SECRET"
-
-# 2) List SMS (token in query string — good for GET)
-curl -s "$BASE/api/mz_sms/sms?limit=10&page=0&token=$TOKEN"
-
-# 3) Latest SMS (published nodes only)
-curl -s "$BASE/api/mz_sms/sms/last?limit=3&token=$TOKEN"
-
-# 4) Create SMS (token can be in query and/or repeated inside JSON)
-curl -s -X POST "$BASE/api/mz_sms/sms?token=$TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{\"token\":\"$TOKEN\",\"title\":\"Test API\",\"field_content\":\"Hello\",\"field_type_action\":\"transfer\"}"
-```
-
-### JavaScript (`fetch`): login then request with token
-
-```javascript
-const base = 'https://drupal.local';
-
-// Login — store field_api_token from JSON (e.g. localStorage in a real app)
-const loginRes = await fetch(`${base}/api/mz_sms/login`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ name: 'sms_operator', password: 'your-password' }),
-});
-const loginJson = await loginRes.json();
-const apiToken = loginJson.field_api_token;
-if (!apiToken) {
-  throw new Error('Set field_api_token on the user in Drupal first.');
+```json
+{
+  "status": true,
+  "duplicate": true,
+  "message": "SMS already recorded",
+  "item": { … }
 }
-
-const tokenQuery = new URLSearchParams({ token: apiToken });
-
-const listRes = await fetch(`${base}/api/mz_sms/sms?${tokenQuery}&limit=20&page=0`);
-const listJson = await listRes.json();
-
-const createRes = await fetch(`${base}/api/mz_sms/sms?${tokenQuery}`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    token: apiToken,
-    title: 'SMS from fetch',
-    field_content: 'Body text',
-    field_type_action: 'transfer',
-  }),
-});
-const created = await createRes.json();
 ```
 
-### Token only in JSON body (no query string)
-
-For **`POST`** / **`PATCH`** you can send **`token`** inside the JSON only:
-
-```bash
-curl -s -X POST "https://drupal.local/api/mz_sms/sms" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token": "YOUR_SECRET",
-    "title": "Sans query string",
-    "field_content": "OK"
-  }'
-```
-
----
-
-## API reference
-
-Replace `YOUR-BASE` with your site origin. Pass **`token`** as a query parameter or inside JSON when using `curl` examples below.
-
-### 1) Create SMS
-
-`POST /api/mz_sms/sms`
-
-Optional fields use defaults where documented in code (e.g. title auto-generated if omitted).
-
-```bash
-curl -X POST "http://YOUR-BASE/api/mz_sms/sms?token=YOUR_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token": "YOUR_SECRET",
-    "title": "Transfert client Dupont",
-    "body": {
-      "value": "<p>Confirmation de transfert</p>",
-      "summary": "Transfert",
-      "format": "basic_html"
-    },
-    "field_content": "Montant transféré : 50 000 Ar",
-    "field_date": "2026-04-14",
-    "field_numero_destinataire": "0340000000",
-    "field_numero_de_l_expediteur": "0320000000",
-    "field_raison": "Remboursement facture #1042",
-    "field_nom": 42,
-    "field_user": "some_drupal_username",
-    "field_type_action": "transfer",
-    "field_current_solde": "125000.50"
-  }'
-```
-
-`field_nom` accepts a client node ID or `{"target_id": 42}`.  
-`field_user` accepts a numeric uid, username string, or `{"target_id": uid}` (username may trigger user creation in server logic—see controller).  
-`field_type_action` must be one of **`transfer`**, **`recu`**, **`depot`**; invalid values are ignored.
-
-**Response (201):**
+Sinon création normale **201** :
 
 ```json
 {
   "status": true,
   "message": "SMS created",
-  "item": { "nid": 55, "title": "…", "field_user": { "target_id": 3, "name": "…" }, "…": "…" }
+  "duplicate": false,
+  "item": { … }
 }
 ```
 
----
-
-### 2) List SMS
-
-`GET /api/mz_sms/sms`
-
-| Query param | Type | Default | Description |
-|-------------|------|---------|-------------|
-| `limit` | int | 50 | Page size (max 200) |
-| `page` | int | 0 | Zero-based page index |
-| `token` | string | — | API token (if not sent elsewhere) |
-
-```bash
-curl "http://YOUR-BASE/api/mz_sms/sms?limit=20&page=0&token=YOUR_SECRET"
-```
-
-**Response:**
-
-```json
-{
-  "status": true,
-  "total": 120,
-  "page": 0,
-  "limit": 20,
-  "items": [
-    {
-      "nid": 55,
-      "title": "Transfert client Dupont",
-      "field_type_action": "transfer",
-      "field_current_solde": "125000.50",
-      "field_nom": { "target_id": 42, "title": "Dupont Jean" },
-      "field_user": { "target_id": 3, "name": "operator" },
-      "created": 1744617600,
-      "changed": 1744617600
-    }
-  ]
-}
-```
+La comparaison utilise uniquement **`field_date`** présent dans le JSON de création (pas le texte de **`field_content`**).
 
 ---
 
-### 3) Last SMS insertion(s)
+## Liste — `GET /api/mz_sms/sms`
 
-`GET /api/mz_sms/sms/last`
+Paramètres query : `limit` (défaut 50, max 200), `page` (défaut 0), `token`.
 
-Returns published **`sms`** nodes only (`status = 1`), newest first.
-
-| Query param | Type | Default | Description |
-|-------------|------|---------|-------------|
-| `limit` | int | 1 | Number of rows (max 50) |
-| `token` | string | — | API token |
-
-```bash
-curl "http://YOUR-BASE/api/mz_sms/sms/last?limit=5&token=YOUR_SECRET"
-```
-
-**Response:**
-
-```json
-{
-  "status": true,
-  "count": 1,
-  "data": [
-    {
-      "nid": 55,
-      "title": "Transfert client Dupont",
-      "body": { "value": "…", "summary": "…", "format": "basic_html" },
-      "field_content": "…",
-      "field_date": "2026-04-14",
-      "field_nom": { "target_id": 42, "title": "Dupont Jean" },
-      "field_user": { "target_id": 3, "name": "operator" },
-      "created": 1744617600,
-      "created_formatted": "2026-04-14 10:00:00",
-      "uid": 1
-    }
-  ]
-}
-```
+Réponse : `status`, `total`, `page`, `limit`, **`items`** (pas `data`). Tri interne : **`created` DESC** (ordre d’insertion Drupal).
 
 ---
 
-### 4) View SMS
+## Derniers par date métier — `GET /api/mz_sms/sms/last`
 
-`GET /api/mz_sms/sms/{nid}`
+Paramètres : `limit` (défaut 1, max 50), `token`.
 
-```bash
-curl "http://YOUR-BASE/api/mz_sms/sms/55?token=YOUR_SECRET"
-```
+- Nœuds **`status = 1`** (publiés).
+- **`field_date` IS NOT NULL** (les SMS sans date métier sont exclus).
+- Tri : **`field_date` DESC**, puis **`nid` DESC**.
+
+Réponse : `count`, **`data`** (tableau d’objets sérialisés comme ailleurs, avec `created_formatted` et `uid` pour compatibilité).
 
 ---
 
-### 5) Update SMS
-
-`PUT` or `PATCH` `/api/mz_sms/sms/{nid}`
-
-Send only the fields to change.
+## Exemples rapides
 
 ```bash
-curl -X PATCH "http://YOUR-BASE/api/mz_sms/sms/55?token=YOUR_SECRET" \
+BASE="https://example.com"
+TOKEN="YOUR_SECRET"
+
+curl -s "$BASE/api/mz_sms/login" -H "Content-Type: application/json" \
+  -d '{"name":"sms_operator","password":"***"}'
+
+# Liste (tri created)
+curl -s "$BASE/api/mz_sms/sms?limit=10&page=0&token=$TOKEN"
+
+# Derniers par field_date (pas par created)
+curl -s "$BASE/api/mz_sms/sms/last?limit=3&token=$TOKEN"
+
+curl -s -X POST "$BASE/api/mz_sms/sms?token=$TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "token": "YOUR_SECRET",
-    "field_type_action": "recu",
-    "field_current_solde": "75000.00",
-    "field_raison": "Paiement reçu le 14/04/2026"
-  }'
+  -d "{\"token\":\"$TOKEN\",\"field_date\":\"2026-04-28T11:07:00\",\"field_content\":\"…\",\"field_type_action\":\"recu\"}"
 ```
 
 ---
 
-### 6) Delete SMS
+## Réponses JSON (rappel)
 
-`DELETE /api/mz_sms/sms/{nid}`
-
-```bash
-curl -X DELETE "http://YOUR-BASE/api/mz_sms/sms/55?token=YOUR_SECRET"
-```
+Les lectures renvoient des objets **`sms`** avec notamment : `nid`, `title`, `body`, `field_content`, `field_date`, champs numériques / références (`field_nom`, `field_user` avec titres résolus), `created`, `changed`.
 
 ---
 
 ## Notes
 
-- **`field_api_token`** is stored on the user and compared verbatim (case-sensitive). Manage rotation in Drupal or custom code; the module does not auto-regenerate it on login.
-- **`field_nom`** and **`field_user`** are expanded with titles / usernames in read responses (`list`, `view`, `last`).
-- **`field_type_action`** is validated server-side; unknown values are ignored on write.
+- **`field_type_action`** : seules les valeurs listées sont acceptées ; les autres sont ignorées à l’écriture.
+- **`field_nom`** / **`field_user`** : en lecture, titres et noms d’utilisateur sont enrichis dans la réponse.
+- **`field_api_token`** : rotation et confidentialité gérées côté Drupal ; le module ne régénère pas le secret au login.

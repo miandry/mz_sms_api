@@ -7,6 +7,7 @@
 
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
+use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\user\Entity\Role;
 
@@ -48,9 +49,9 @@ function _mz_sms_api_ensure_sms_fields() {
       'field_settings'   => [],
     ],
     'field_date' => [
-      'label'            => 'Date',
+      'label'            => 'Date et heure',
       'type'             => 'datetime',
-      'storage_settings' => ['datetime_type' => 'date'],
+      'storage_settings' => ['datetime_type' => 'datetime'],
       'field_settings'   => [],
     ],
     'field_numero_destinataire' => [
@@ -264,5 +265,115 @@ function mz_sms_api_update_10005() {
 function mz_sms_api_update_10006() {
   _mz_sms_api_ensure_sms_manager_role();
   return t('SMS manager role created for mz_sms_api.');
+}
+
+/**
+ * Add field_heure on sms bundle (time string; used with field_date for insert dedupe).
+ */
+function mz_sms_api_update_10007() {
+  _mz_sms_api_ensure_sms_fields();
+  return t('field_heure added to sms content type.');
+}
+
+/**
+ * field_date = date+heure (datetime), suppression de field_heure, migration des données.
+ */
+function mz_sms_api_update_10008() {
+  $st_date = FieldStorageConfig::loadByName('node', 'field_date');
+  if ($st_date) {
+    $bundles = $st_date->getBundles();
+    if (count($bundles) !== 1 || !isset($bundles['sms'])) {
+      \Drupal::logger('mz_sms_api')->warning(
+        'mz_sms_api_update_10008: field_date storage is not sms-only; skipping field_date recreation (remove field_heure only).'
+      );
+      $fc = FieldConfig::loadByName('node', 'sms', 'field_heure');
+      if ($fc) {
+        $fc->delete();
+      }
+      $st_heure = FieldStorageConfig::loadByName('node', 'field_heure');
+      if ($st_heure && empty($st_heure->getBundles())) {
+        $st_heure->delete();
+      }
+      return t('field_heure removed; field_date left unchanged (shared storage).');
+    }
+  }
+
+  $nids = \Drupal::entityQuery('node')
+    ->condition('type', 'sms')
+    ->accessCheck(FALSE)
+    ->execute();
+
+  $backup = [];
+  foreach ($nids as $nid) {
+    $node = Node::load($nid);
+    if (!$node) {
+      continue;
+    }
+    $d = $node->hasField('field_date') && !$node->get('field_date')->isEmpty()
+      ? (string) $node->get('field_date')->value
+      : '';
+    $h = $node->hasField('field_heure') && !$node->get('field_heure')->isEmpty()
+      ? trim((string) $node->get('field_heure')->value)
+      : '';
+    if ($d === '' && $h === '') {
+      continue;
+    }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/', $d)) {
+      $backup[$nid] = substr($d, 0, 19);
+    }
+    else {
+      $datepart = substr($d, 0, 10);
+      if ($h !== '' && preg_match('/^(\d{1,2}):(\d{2})/', $h, $hm)) {
+        $backup[$nid] = sprintf('%sT%02d:%02d:00', $datepart, (int) $hm[1], (int) $hm[2]);
+      }
+      else {
+        $backup[$nid] = $datepart . 'T00:00:00';
+      }
+    }
+  }
+
+  $fc = FieldConfig::loadByName('node', 'sms', 'field_heure');
+  if ($fc) {
+    $fc->delete();
+  }
+  $st_heure = FieldStorageConfig::loadByName('node', 'field_heure');
+  if ($st_heure && empty($st_heure->getBundles())) {
+    $st_heure->delete();
+  }
+
+  $fc_date = FieldConfig::loadByName('node', 'sms', 'field_date');
+  if ($fc_date) {
+    $fc_date->delete();
+  }
+  $st_date = FieldStorageConfig::loadByName('node', 'field_date');
+  if ($st_date) {
+    $st_date->delete();
+  }
+
+  FieldStorageConfig::create([
+    'field_name' => 'field_date',
+    'entity_type' => 'node',
+    'type' => 'datetime',
+    'settings' => ['datetime_type' => 'datetime'],
+    'cardinality' => 1,
+  ])->save();
+
+  FieldConfig::create([
+    'field_storage' => FieldStorageConfig::loadByName('node', 'field_date'),
+    'bundle' => 'sms',
+    'label' => 'Date et heure',
+    'required' => FALSE,
+    'settings' => [],
+  ])->save();
+
+  foreach ($backup as $nid => $value) {
+    $node = Node::load($nid);
+    if ($node && $node->bundle() === 'sms') {
+      $node->set('field_date', $value);
+      $node->save();
+    }
+  }
+
+  return t('field_date stores date and time; field_heure removed; existing SMS values migrated.');
 }
 

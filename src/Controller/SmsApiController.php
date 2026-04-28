@@ -172,18 +172,36 @@ class SmsApiController extends ControllerBase {
     }
 
     try {
+      $payload = $data;
+      unset($payload['token']);
+
+      // Anti-doublon : même valeur field_date (telle qu’envoyée) pour le même auteur.
+      $fd = isset($payload['field_date']) ? trim((string) $payload['field_date']) : '';
+      if ($fd !== '') {
+        $existing = $this->findExistingSmsByFieldDateTime((int) $auth_user->id(), $fd);
+        if ($existing) {
+          return new JsonResponse([
+            'status' => TRUE,
+            'duplicate' => TRUE,
+            'message' => 'SMS already recorded',
+            'item' => $this->serializeSmsNode($existing),
+          ], 200);
+        }
+      }
+
       $node = Node::create([
         'type' => 'sms',
-        'title' => trim((string) ($data['title'] ?? 'SMS ' . date('Y-m-d H:i:s'))),
+        'title' => trim((string) ($payload['title'] ?? 'SMS ' . date('Y-m-d H:i:s'))),
         'uid' => (int) $auth_user->id(),
       ]);
 
-      $this->applyPayload($node, $data);
+      $this->applyPayload($node, $payload);
       $node->save();
 
       return new JsonResponse([
         'status' => TRUE,
         'message' => 'SMS created',
+        'duplicate' => FALSE,
         'item' => $this->serializeSmsNode($node),
       ], 201);
     }
@@ -298,8 +316,10 @@ class SmsApiController extends ControllerBase {
     }
 
     if ($node->hasField('field_date') && isset($data['field_date'])) {
-      $date_value = substr((string) $data['field_date'], 0, 10);
-      $node->set('field_date', [['value' => $date_value]]);
+      $v = trim((string) $data['field_date']);
+      if ($v !== '') {
+        $node->set('field_date', $v);
+      }
     }
 
     if ($node->hasField('field_numero_destinataire') && isset($data['field_numero_destinataire'])) {
@@ -548,9 +568,42 @@ class SmsApiController extends ControllerBase {
   }
 
   /**
+   * Finds an sms node with the same field_date value for this author (exact match).
+   */
+  protected function findExistingSmsByFieldDateTime(int $uid, string $storage_value) {
+    $storage_value = trim($storage_value);
+    if ($storage_value === '') {
+      return NULL;
+    }
+
+    $defs = \Drupal::service('entity_field.manager')->getFieldDefinitions('node', 'sms');
+    if (!isset($defs['field_date'])) {
+      return NULL;
+    }
+
+    $nids = \Drupal::entityQuery('node')
+      ->condition('type', 'sms')
+      ->condition('uid', $uid)
+      ->condition('field_date', $storage_value)
+      ->accessCheck(FALSE)
+      ->sort('nid', 'DESC')
+      ->range(0, 1)
+      ->execute();
+
+    if (empty($nids)) {
+      return NULL;
+    }
+
+    $node = Node::load((int) reset($nids));
+    return ($node && $this->isSmsNode($node)) ? $node : NULL;
+  }
+
+  /**
    * GET /api/mz_sms/sms/last
    *
-   * Returns the most recently created sms node.
+   * Returns published sms nodes with the latest field_date (SMS logical time),
+   * sorted by field_date descending (not by Drupal created).
+   *
    * Requires authentication: ?token= or JSON/form body key "token" matching user
    * field_api_token; user must have the sms_manager role.
    *
@@ -567,13 +620,16 @@ class SmsApiController extends ControllerBase {
 
     $limit = max(1, min(50, (int) ($request->query->get('limit', 1))));
 
-    $ids = \Drupal::entityQuery('node')
+    $query = \Drupal::entityQuery('node')
       ->condition('type', 'sms')
       ->condition('status', 1)
-      ->sort('created', 'DESC')
+      ->condition('field_date', NULL, 'IS NOT NULL')
+      ->sort('field_date', 'DESC')
+      ->sort('nid', 'DESC')
       ->range(0, $limit)
-      ->accessCheck(FALSE)
-      ->execute();
+      ->accessCheck(FALSE);
+
+    $ids = $query->execute();
 
     if (empty($ids)) {
       return new JsonResponse([
